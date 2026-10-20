@@ -1,0 +1,8 @@
+# Fajr-autom
+.env
+venv/
+__pycache__/
+*.pyc
+*.log
+ngrok.exe
+ngrok-v3-stable-windows-amd64/
