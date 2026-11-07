@@ -6,6 +6,7 @@ import sib_api_v3_sdk
 from sib_api_v3_sdk.rest import ApiException
 from dotenv import load_dotenv
 import os
+import hmac
 
 # ===== Odoo Integration =====
 from odoo_service import create_odoo_student
@@ -17,6 +18,27 @@ app = Flask(__name__)
 MOODLE_URL = os.getenv("MOODLE_URL")
 MOODLE_TOKEN = os.getenv("MOODLE_TOKEN")
 BREVO_API_KEY = os.getenv("BREVO_API_KEY")
+
+# ===== Render deployment settings =====
+# مهلة لكل طلب خارجي (Moodle / Brevo) عشان الـ worker مايعلقش
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "20"))
+# اختياري: لو اتحدد، الـ webhook بيرفض أي طلب مفيهوش نفس الـ token
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
+
+_missing = [n for n, v in {
+    "MOODLE_URL": MOODLE_URL,
+    "MOODLE_TOKEN": MOODLE_TOKEN,
+    "BREVO_API_KEY": BREVO_API_KEY,
+    "ODOO_PASSWORD": os.getenv("ODOO_PASSWORD"),
+}.items() if not v]
+if _missing:
+    print(f"⚠️ Missing environment variables: {', '.join(_missing)}")
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"}), 200
+
 
 def generate_password():
     chars = string.ascii_letters
@@ -40,13 +62,19 @@ def send_email(to_email, to_name, subject, body):
     )
 
     try:
-        api_instance.send_transac_email(send_smtp_email)
+        api_instance.send_transac_email(send_smtp_email, _request_timeout=REQUEST_TIMEOUT)
         print(f"✅ Email sent to {to_email}")
     except ApiException as e:
         print(f"❌ Email error: {e}")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    # حماية اختيارية: ?token=... أو هيدر X-Webhook-Token
+    if WEBHOOK_SECRET:
+        supplied = request.args.get("token") or request.headers.get("X-Webhook-Token", "")
+        if not hmac.compare_digest(supplied, WEBHOOK_SECRET):
+            return jsonify({"status": "forbidden"}), 403
+
     data = request.get_json(silent=True) or request.form.to_dict()
     print(f"📥 Received: {data}")
 
@@ -54,6 +82,10 @@ def webhook():
     last_name  = data.get('last_name', '')
     email      = data.get('email', '')
     gender     = data.get('gender', '')
+
+    if not email:
+        print("❌ Missing email in webhook payload")
+        return jsonify({"status": "error", "message": "email is required"}), 400
 
     # ===== Odoo Integration: حقول إضافية مطلوبة لـ op.student =====
     arabic_name = data.get('arabic_name', '')
@@ -94,7 +126,8 @@ def webhook():
             "moodlewsrestformat": "json",
             "criteria[0][key]": "email",
             "criteria[0][value]": email,
-        }
+        },
+        timeout=REQUEST_TIMEOUT
     )
 
     search_result = search_response.json()
@@ -149,7 +182,8 @@ def webhook():
 
     response = requests.post(
         f"{MOODLE_URL}/webservice/rest/server.php",
-        data=user_data
+        data=user_data,
+        timeout=REQUEST_TIMEOUT
     )
 
     result = response.json()
@@ -173,7 +207,8 @@ def webhook():
 
     enroll_response = requests.post(
         f"{MOODLE_URL}/webservice/rest/server.php",
-        data=enroll_data
+        data=enroll_data,
+        timeout=REQUEST_TIMEOUT
     )
 
     if enroll_response.text == "null":
@@ -194,7 +229,8 @@ def webhook():
 
     group_response = requests.post(
         f"{MOODLE_URL}/webservice/rest/server.php",
-        data=group_data
+        data=group_data,
+        timeout=REQUEST_TIMEOUT
     )
 
     if group_response.text == "null":
@@ -232,4 +268,6 @@ def webhook():
     })
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5003)
+    # للتشغيل المحلي فقط - على Render بيشتغل gunicorn
+    debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+    app.run(debug=debug, host='0.0.0.0', port=int(os.getenv('PORT', 5003)))

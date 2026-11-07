@@ -16,6 +16,7 @@ ODOO_URL = os.getenv("ODOO_URL", "https://sys.fajr.com").strip()
 ODOO_DB = os.getenv("ODOO_DB", "Fajr").strip()
 ODOO_USERNAME = os.getenv("ODOO_USERNAME", "develop_register@fajr.com").strip()
 ODOO_PASSWORD = os.getenv("ODOO_PASSWORD", "").strip()
+ODOO_TIMEOUT = int(os.getenv("ODOO_TIMEOUT", "30"))  # ثواني
 
 # ===== Defaults الثابتة =====
 ODOO_CATEGORY_ID = 40    # Online Group (op.category) - مؤكد ✅
@@ -44,6 +45,37 @@ class OdooConnectionError(Exception):
     pass
 
 
+class _TimeoutTransport(xmlrpc.client.Transport):
+    def __init__(self, timeout=ODOO_TIMEOUT, **kwargs):
+        super().__init__(**kwargs)
+        self._timeout = timeout
+
+    def make_connection(self, host):
+        conn = super().make_connection(host)
+        conn.timeout = self._timeout
+        return conn
+
+
+class _TimeoutSafeTransport(xmlrpc.client.SafeTransport):
+    def __init__(self, timeout=ODOO_TIMEOUT, **kwargs):
+        super().__init__(**kwargs)
+        self._timeout = timeout
+
+    def make_connection(self, host):
+        conn = super().make_connection(host)
+        conn.timeout = self._timeout
+        return conn
+
+
+def _proxy(path):
+    """ServerProxy مع timeout عشان الـ worker على Render مايفضلش معلق"""
+    transport = (
+        _TimeoutSafeTransport() if ODOO_URL.lower().startswith("https")
+        else _TimeoutTransport()
+    )
+    return xmlrpc.client.ServerProxy(f"{ODOO_URL}{path}", transport=transport)
+
+
 _uid_cache = None
 
 
@@ -53,13 +85,13 @@ def _get_connection():
     """
     global _uid_cache
 
-    common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
+    common = _proxy("/xmlrpc/2/common")
     if _uid_cache is None:
         _uid_cache = common.authenticate(ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD, {})
         if not _uid_cache:
             raise OdooConnectionError("Odoo authentication failed — تأكد من ODOO_PASSWORD")
 
-    models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
+    models = _proxy("/xmlrpc/2/object")
     return _uid_cache, models
 
 

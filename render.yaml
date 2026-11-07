@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: fajr-autom
+    runtime: python
+    region: frankfurt          # الأقرب لمصر
+    plan: starter              # الـ free بتنام وبتفوّت الـ webhooks
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: PYTHONUNBUFFERED   # عشان الـ print يظهر فورا في Render Logs
+        value: "1"
+      - key: MOODLE_URL
+        sync: false
+      - key: MOODLE_TOKEN
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: ODOO_URL
+        sync: false
+      - key: ODOO_DB
+        sync: false
+      - key: ODOO_USERNAME
+        sync: false
+      - key: ODOO_PASSWORD
+        sync: false
+      - key: WEBHOOK_SECRET     # اختياري
+        sync: false
