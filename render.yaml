@@ -10,7 +10,7 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
-      - key: PYTHONUNBUFFERED   # عشان الـ print يظهر فورا في Render Logs
+      - key: PYTHONUNBUFFERED   # عشان اللوج يظهر فورا في Render Logs
         value: "1"
       - key: MOODLE_URL
         sync: false
@@ -26,5 +26,5 @@ services:
         sync: false
       - key: ODOO_PASSWORD
         sync: false
-      - key: WEBHOOK_SECRET     # اختياري
+      - key: WEBHOOK_SECRET     # إلزامي: بدونه الـ webhook بيرفض كل الطلبات
         sync: false
