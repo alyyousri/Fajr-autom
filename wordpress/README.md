@@ -33,4 +33,5 @@ If `study_mode` cannot be found, nothing is sent and the log lists the field nam
 The snippet writes `[Fajr Webhook] ...` lines with `error_log()` (hosting PHP error log, or
 `wp-content/debug.log` when `WP_DEBUG_LOG` is on). Personal data is not logged.
 Typical lines: `OK (200): {"status":"success",...}`, `{"status":"skipped",...}` for On-site,
-`FAILED (403)` for a wrong secret.
+`FAILED (403)` for a wrong secret, and `Ignored form id=N (...)` when another Fluent Form is submitted
+(or when `FAJR_LEVEL_TEST_FORM_ID` does not match the admission form – the admission form is **5**).

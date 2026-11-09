@@ -161,12 +161,19 @@ class AuthTests(WebhookTestCase):
         self.assertEqual(self.moodle.calls, [])
         self.odoo.assert_not_called()
 
-    def test_missing_token_is_forbidden(self):
-        self.assertEqual(self.send(_headers={}).status_code, 403)
+    def test_missing_token_is_forbidden_and_logged(self):
+        with self.assertLogs("fajr", level="WARNING") as logs:
+            response = self.send(_headers={})
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(self.moodle.calls, [])
+        self.assertIn("Rejected", "\n".join(logs.output))
 
-    def test_wrong_token_is_forbidden(self):
-        self.assertEqual(self.send(_headers={"X-Webhook-Token": "nope"}).status_code, 403)
+    def test_wrong_token_is_forbidden_and_value_not_logged(self):
+        with self.assertLogs("fajr", level="WARNING") as logs:
+            response = self.send(_headers={"X-Webhook-Token": "wrong-token-xyz"})
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Rejected", "\n".join(logs.output))
+        self.assertNotIn("wrong-token-xyz", "\n".join(logs.output))  # القيمة المرسلة لا تُسجَّل
 
     def test_non_ascii_token_is_forbidden_not_500(self):
         self.assertEqual(self.send(_headers={}, _query="?token=%C3%A9").status_code, 403)

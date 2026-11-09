@@ -5,7 +5,9 @@ services:
     region: frankfurt          # الأقرب لمصر
     plan: starter              # الـ free بتنام وبتفوّت الـ webhooks
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    # --access-logfile: سطر لكل طلب في Render Logs (الطريقة والمسار والحالة والزمن).
+    # الفورمات المخصص بدون query string عشان لو أحد استخدم ?token= مايظهرش السر في اللوج.
+    startCommand: "gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --access-logfile - --access-logformat '%(m)s %(U)s %(s)s %(L)ss'"
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION

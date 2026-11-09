@@ -312,6 +312,8 @@ def webhook():
         logger.error("WEBHOOK_SECRET is not configured - rejecting request")
         return jsonify({"status": "error", "message": "server_not_configured"}), 503
     if not _is_authorized():
+        # بنسجل الرفض (بدون القيمة المرسلة) عشان نعرف لو الـ secret في WordPress مختلف عن Render
+        logger.warning("Rejected: missing or invalid webhook token (compare WEBHOOK_SECRET in WordPress and Render)")
         return jsonify({"status": "forbidden"}), 403
 
     # ---- 2) قراءة البيانات ----
