@@ -9,7 +9,7 @@ Connects the WordPress admission form (Fluent Forms) → Flask webhook → Odoo 
 
 ## Flow
 1. Student fills the admission form on WordPress.
-2. WPCode sends a webhook to Flask (`POST /webhook`, header `X-Webhook-Token`).
+2. WPCode sends a webhook to Flask (`POST /webhook`, header `X-Webhook-Token`) – the snippet lives in [`wordpress/`](wordpress/README.md).
 3. `study_mode = On-site` → ignored (`{"status": "skipped"}`). Missing/unknown `study_mode` → `400`.
 4. Flask creates (or finds) the student in Odoo.
 5. Flask looks the student up in Moodle:
