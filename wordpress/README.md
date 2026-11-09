@@ -8,7 +8,11 @@ so after any change here, paste the new version into WPCode.
 ## Install / update
 1. WPCode → Code Snippets → open the existing Fajr snippet (or Add New → PHP Snippet).
 2. Replace its whole content with `wpcode-snippet.php` (never keep two copies active).
+   **Do not paste the first `<?php` line** – WPCode's PHP snippet box adds it itself.
 3. Set `FAJR_WEBHOOK_SECRET` to the same value as `WEBHOOK_SECRET` on the server.
+   The secret travels in an HTTP header, so use **only English letters and digits** (no Arabic, no spaces,
+   no quotes), at least 32 random characters. An Arabic secret never matches on the server (403) even if
+   both sides are identical; the snippet refuses to send and logs why.
 4. Check `FAJR_LEVEL_TEST_FORM_ID` is the Form ID of the admission form
    (Fluent Forms → All Forms → shortcode `[fluentform id="X"]`).
 5. Activate.
