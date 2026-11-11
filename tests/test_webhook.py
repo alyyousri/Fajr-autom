@@ -271,12 +271,35 @@ class GenderTests(WebhookTestCase):
             with self.subTest(value=value):
                 self.assertEqual(self.group_of(value), A.MOODLE_GROUP_FEMALE)
 
+    def test_gender_tolerates_invisible_characters_and_combined_labels(self):
+        male = ("‏Male", "Male‎", "‫Male‬", "Male ", "Male (ذكر)", "ذكر", "Male - ذكر")
+        female = ("‏Female", "Female‏", "Female (أنثى)", "أنثى", "انثى", "أنثي", "Female / انثى")
+        for value in male:
+            with self.subTest(value=value):
+                self.assertEqual(self.group_of(value), A.MOODLE_GROUP_MALE)
+        for value in female:
+            with self.subTest(value=value):
+                self.assertEqual(self.group_of(value), A.MOODLE_GROUP_FEMALE)
+
     def test_unknown_gender_is_not_put_in_any_group(self):
         response = self.send(gender="")
         body = response.get_json()
         self.assertEqual(body["status"], "partial")
         self.assertIn("gender_unknown", body["warnings"])
         self.assertNotIn("core_group_add_group_members", self.moodle.functions())
+
+    def test_ambiguous_gender_is_not_guessed(self):
+        for value in ("Male/Female", "ذكر أنثى", "x", "1", "Other"):
+            with self.subTest(value=value):
+                self.assertIsNone(O.normalize_gender(value))
+
+    def test_unrecognized_gender_value_is_logged_with_escapes(self):
+        # عشان لو الفورم بتبعت حرف خفي نعرفه من اللوج
+        with self.assertLogs("fajr", level="ERROR") as logs:
+            self.send(gender="‏خيار")
+        text = "\n".join(logs.output)
+        self.assertIn("Unrecognized gender value", text)
+        self.assertIn("\\u200f", text)
 
     def test_normalize_gender_helper(self):
         self.assertEqual(O.normalize_gender("Male"), "male")

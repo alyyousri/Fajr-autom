@@ -444,7 +444,11 @@ def webhook():
 
     if group_id is None:
         # مانحطش الطالب في مجموعة غلط: أحسن من مجموعة الإناث بالافتراض
-        logger.error("Unrecognized gender value - user id=%s was NOT added to any group", user_id)
+        # بنسجل القيمة بصيغة ascii عشان الحروف الخفية (زي علامة RTL) تبان، ومقصوصة لـ 40 حرف
+        logger.error(
+            "Unrecognized gender value %s - user id=%s was NOT added to any group",
+            ascii(gender[:40]), user_id,
+        )
         warnings.append("gender_unknown")
     else:
         try:
