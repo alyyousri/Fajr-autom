@@ -161,12 +161,19 @@ class AuthTests(WebhookTestCase):
         self.assertEqual(self.moodle.calls, [])
         self.odoo.assert_not_called()
 
-    def test_missing_token_is_forbidden(self):
-        self.assertEqual(self.send(_headers={}).status_code, 403)
+    def test_missing_token_is_forbidden_and_logged(self):
+        with self.assertLogs("fajr", level="WARNING") as logs:
+            response = self.send(_headers={})
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(self.moodle.calls, [])
+        self.assertIn("Rejected", "\n".join(logs.output))
 
-    def test_wrong_token_is_forbidden(self):
-        self.assertEqual(self.send(_headers={"X-Webhook-Token": "nope"}).status_code, 403)
+    def test_wrong_token_is_forbidden_and_value_not_logged(self):
+        with self.assertLogs("fajr", level="WARNING") as logs:
+            response = self.send(_headers={"X-Webhook-Token": "wrong-token-xyz"})
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("Rejected", "\n".join(logs.output))
+        self.assertNotIn("wrong-token-xyz", "\n".join(logs.output))  # القيمة المرسلة لا تُسجَّل
 
     def test_non_ascii_token_is_forbidden_not_500(self):
         self.assertEqual(self.send(_headers={}, _query="?token=%C3%A9").status_code, 403)
@@ -264,12 +271,35 @@ class GenderTests(WebhookTestCase):
             with self.subTest(value=value):
                 self.assertEqual(self.group_of(value), A.MOODLE_GROUP_FEMALE)
 
+    def test_gender_tolerates_invisible_characters_and_combined_labels(self):
+        male = ("‏Male", "Male‎", "‫Male‬", "Male ", "Male (ذكر)", "ذكر", "Male - ذكر")
+        female = ("‏Female", "Female‏", "Female (أنثى)", "أنثى", "انثى", "أنثي", "Female / انثى")
+        for value in male:
+            with self.subTest(value=value):
+                self.assertEqual(self.group_of(value), A.MOODLE_GROUP_MALE)
+        for value in female:
+            with self.subTest(value=value):
+                self.assertEqual(self.group_of(value), A.MOODLE_GROUP_FEMALE)
+
     def test_unknown_gender_is_not_put_in_any_group(self):
         response = self.send(gender="")
         body = response.get_json()
         self.assertEqual(body["status"], "partial")
         self.assertIn("gender_unknown", body["warnings"])
         self.assertNotIn("core_group_add_group_members", self.moodle.functions())
+
+    def test_ambiguous_gender_is_not_guessed(self):
+        for value in ("Male/Female", "ذكر أنثى", "x", "1", "Other"):
+            with self.subTest(value=value):
+                self.assertIsNone(O.normalize_gender(value))
+
+    def test_unrecognized_gender_value_is_logged_with_escapes(self):
+        # عشان لو الفورم بتبعت حرف خفي نعرفه من اللوج
+        with self.assertLogs("fajr", level="ERROR") as logs:
+            self.send(gender="‏خيار")
+        text = "\n".join(logs.output)
+        self.assertIn("Unrecognized gender value", text)
+        self.assertIn("\\u200f", text)
 
     def test_normalize_gender_helper(self):
         self.assertEqual(O.normalize_gender("Male"), "male")

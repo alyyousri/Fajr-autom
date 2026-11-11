@@ -14,13 +14,15 @@
 if (!defined('FAJR_WEBHOOK_URL')) {
     define('FAJR_WEBHOOK_URL', 'https://fajr-autom.onrender.com/webhook');
 }
-// إلزامي: نفس قيمة WEBHOOK_SECRET اللي في Render بالظبط
+// إلزامي: نفس قيمة WEBHOOK_SECRET اللي في Render بالظبط.
+// لازم تكون حروف إنجليزية وأرقام فقط (بدون عربي ولا مسافات ولا علامات تنصيص)، طويلة وعشوائية (32 حرف أو أكتر)
+// لأنها بتتبعت في هيدر HTTP، والعربي مش هيطابق على السيرفر أبدًا.
 if (!defined('FAJR_WEBHOOK_SECRET')) {
     define('FAJR_WEBHOOK_SECRET', '');
 }
 // Form ID بتاع فورم القبول (Fluent Forms > All Forms > الـ Shortcode: [fluentform id="X"])
 if (!defined('FAJR_LEVEL_TEST_FORM_ID')) {
-    define('FAJR_LEVEL_TEST_FORM_ID', 3);
+    define('FAJR_LEVEL_TEST_FORM_ID', 5);
 }
 
 add_action('fluentform_submission_inserted', 'fajr_send_to_webhook', 20, 3);
@@ -95,13 +97,20 @@ function fajr_detect_study_mode($data) {
 
 function fajr_send_to_webhook($entryId, $formData, $form) {
 
-    // نشتغل بس على فورم القبول
+    // نشتغل بس على فورم القبول. أي فورم تاني بيتسجل في اللوج بس (رقمه، بدون أي بيانات)
+    // عشان لو الرقم اتغير نلاحظ فورًا بدل ما السنيبت يسكت.
     if ((int) $form->id !== (int) FAJR_LEVEL_TEST_FORM_ID) {
+        fajr_log('Ignored form id=' . (int) $form->id . ' (the admission form id is set to ' . (int) FAJR_LEVEL_TEST_FORM_ID . ')');
         return;
     }
 
     if (FAJR_WEBHOOK_SECRET === '') {
         fajr_log('FAJR_WEBHOOK_SECRET is empty - request NOT sent (the server would reject it with 403)');
+        return;
+    }
+    // الهيدرز لازم تكون ASCII: سر فيه عربي أو مسافات مش هيطابق على السيرفر (403) حتى لو متطابق بالحرف
+    if (!preg_match('/^[\x21-\x7E]+$/', FAJR_WEBHOOK_SECRET)) {
+        fajr_log('FAJR_WEBHOOK_SECRET must contain only English letters, digits and symbols (no Arabic, no spaces) - request NOT sent');
         return;
     }
 

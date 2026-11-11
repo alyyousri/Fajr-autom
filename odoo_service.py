@@ -6,6 +6,7 @@ import datetime
 import logging
 import os
 import re
+import unicodedata
 import xmlrpc.client
 
 from dotenv import load_dotenv
@@ -54,17 +55,37 @@ class OdooConnectionError(Exception):
 
 
 # ===== تطبيع الجنس (مشترك مع app.py عشان نفس القاعدة تتطبق في Moodle و Odoo) =====
+# الكلمات بعد التطبيع: الهمزات اتشالت (أ/إ/آ -> ا) و ى -> ي، فبتغطي "أنثى" و"انثى" و"أنثي"
 _MALE = {"male", "m", "ذكر"}
-_FEMALE = {"female", "f", "أنثى", "انثى"}
+_FEMALE = {"female", "f", "انثي"}
 _ODOO_GENDER = {"male": "m", "female": "f"}  # قيم الـ selection في op.student
+_ARABIC_LETTER_FIXES = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي"})
+
+
+def _gender_tokens(raw_gender):
+    """
+    يحوّل نص الجنس لكلمات مطبّعة: بيشيل الحروف الخفية (علامات الاتجاه RTL/LTR، المسافات الصفرية،
+    NBSP) اللي بتتضاف أحيانًا في المواقع العربية، وبيوحّد الحالة والهمزات.
+    فـ "Male" و "‏Male" و "Male (ذكر)" كلها بتتحول لكلمات نقدر نطابقها.
+    """
+    text = unicodedata.normalize("NFKC", str(raw_gender or ""))
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    text = text.casefold().translate(_ARABIC_LETTER_FIXES)
+    return [token for token in re.split(r"[\W_]+", text) if token]
 
 
 def normalize_gender(raw_gender):
-    """يرجع 'male' أو 'female' أو None لو القيمة مش مفهومة (بدون حساسية لحالة الأحرف)"""
-    key = str(raw_gender or "").strip().lower()
-    if key in _MALE:
+    """
+    يرجع 'male' أو 'female' أو None لو القيمة مش مفهومة.
+    بيتجاهل حالة الأحرف والحروف الخفية، وبيقبل نص مركّب زي "Male (ذكر)".
+    لو النص فيه الاتنين مع بعض (Male/Female) أو مفيهوش أي منهم يرجع None.
+    """
+    tokens = _gender_tokens(raw_gender)
+    is_male = any(token in _MALE for token in tokens)
+    is_female = any(token in _FEMALE for token in tokens)
+    if is_male and not is_female:
         return "male"
-    if key in _FEMALE:
+    if is_female and not is_male:
         return "female"
     return None
 
