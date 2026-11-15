@@ -342,7 +342,7 @@ class FlowTests(WebhookTestCase):
         self.assertEqual(body["user_id"], 5)
         self.assertNotIn("core_user_create_users", self.moodle.functions())
         self.assertEqual(len(FakeMailAPI.sent), 1)
-        self.assertIn("مسجل بالفعل", FakeMailAPI.sent[0]["subject"])
+        self.assertIn("already registered", FakeMailAPI.sent[0]["subject"])
 
     def test_lookup_requires_exact_email_match(self):
         # البحث ممكن يرجع إيميل قريب (_ كـ wildcard) - ده مش نفس الطالب
@@ -403,7 +403,7 @@ class EmailTests(WebhookTestCase):
         self.send()
         html_content = FakeMailAPI.sent[0]["html_content"]
         self.assertNotIn("سيتم التواصل معك", html_content)
-        self.assertIn("حسب الموعد الذي اخترته", html_content)
+        self.assertIn("as selected in the registration form", html_content)
 
 
 # ---------------------------------------------------------------- الأخطاء
