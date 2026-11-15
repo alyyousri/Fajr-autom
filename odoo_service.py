@@ -202,6 +202,23 @@ def find_student_by_email(email):
     return existing[0] if existing else None
 
 
+# سطر الاستثناء داخل الـ traceback اللي Odoo بيرجعه، زي: psycopg2.IntegrityError: ...
+_EXCEPTION_LINE = re.compile(r"^(?:[A-Za-z_][\w]*\.)+[A-Z]\w*(?:Error|Exception|Fault|Warning)\b.*$")
+
+
+def _fault_summary(fault, limit=400):
+    """
+    Odoo بيرجع traceback كامل، وأخطاء قاعدة البيانات فيه بتحتوي سطر DETAIL بيعرض
+    الصف كله (اسم الطالب وبياناته). فبنطلّع بس سطور نوع الخطأ والحقل، من غير سطر DETAIL.
+    """
+    text = str(getattr(fault, "faultString", "") or fault)
+    lines = [line.strip() for line in text.splitlines() if _EXCEPTION_LINE.match(line.strip())]
+    if not lines:
+        # شكل مش متوقع: الأسلم مانطبعش النص الخام لأنه ممكن يحتوي بيانات الطالب
+        return f"Odoo fault (code {getattr(fault, 'faultCode', '?')}, details withheld)"
+    return " | ".join(lines[:2])[:limit]
+
+
 def create_odoo_student(form_data):
     """
     form_data المتوقع فيها (من الفورم):
@@ -234,6 +251,16 @@ def create_odoo_student(form_data):
                 "already_existed": True,
             }
 
+        # الجنس إلزامي في op.student (NOT NULL). لو ناقص أو مش مفهوم، Odoo هيرفض الإنشاء
+        # وبيكتب بيانات الطالب في رسالة الخطأ، فبنوقف هنا برسالة واضحة بدل ما نحاول
+        odoo_gender = _normalize_gender(gender_raw)
+        if not odoo_gender:
+            logger.error(
+                "Odoo: student NOT created - gender is missing or unrecognized (Odoo requires it). "
+                "Check that the gender field name is mapped in the WordPress snippet"
+            )
+            return {"success": False, "error": "gender missing or unrecognized"}
+
         full_name = arabic_name or f"{first_name} {last_name}".strip()
 
         student_vals = {
@@ -244,7 +271,7 @@ def create_odoo_student(form_data):
             "mobile": mobile,
             "email": email,
             "birth_date": _normalize_date(birth_date_raw),
-            "gender": _normalize_gender(gender_raw),
+            "gender": odoo_gender,
             "category_id": ODOO_CATEGORY_ID,
             "price_list": ODOO_PRICELIST_ID,
         }
@@ -273,7 +300,7 @@ def create_odoo_student(form_data):
             if created:
                 gr_no = created[0].get(STUDENT_CODE_FIELD) or ""
         except xmlrpc.client.Fault as e:
-            logger.warning("Could not read student code after creation: %s", e)
+            logger.warning("Could not read student code after creation: %s", _fault_summary(e))
 
         logger.info("Odoo: student created id=%s", student_id)
         return {
@@ -284,8 +311,9 @@ def create_odoo_student(form_data):
         }
 
     except xmlrpc.client.Fault as e:
-        logger.error("Odoo XML-RPC fault: %s", e)
-        return {"success": False, "error": str(e)}
+        summary = _fault_summary(e)
+        logger.error("Odoo XML-RPC fault: %s", summary)
+        return {"success": False, "error": summary}
     except Exception as e:
         logger.error("Odoo unexpected error (%s): %s", type(e).__name__, e)
         return {"success": False, "error": str(e)}

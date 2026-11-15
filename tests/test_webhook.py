@@ -281,6 +281,12 @@ class GenderTests(WebhookTestCase):
             with self.subTest(value=value):
                 self.assertEqual(self.group_of(value), A.MOODLE_GROUP_FEMALE)
 
+    def test_empty_gender_is_listed_as_empty_in_the_log(self):
+        with self.assertLogs("fajr", level="INFO") as logs:
+            self.send(gender="")
+        received = [line for line in logs.output if "Webhook received" in line][0]
+        self.assertIn("empty: ['gender']", received)
+
     def test_unknown_gender_is_not_put_in_any_group(self):
         response = self.send(gender="")
         body = response.get_json()
@@ -497,6 +503,46 @@ class OdooServiceTests(unittest.TestCase):
         with mock.patch.object(O, "ODOO_URL", ""):
             result = O.create_odoo_student({"first_name": "Ali", "email": "a@b.com"})
         self.assertFalse(result["success"])
+
+    def test_missing_gender_does_not_attempt_creation(self):
+        # الجنس إلزامي في Odoo: من غيره مانبعتش الطلب خالص
+        with mock.patch.object(O, "find_student_by_email", return_value=None), \
+                mock.patch.object(O, "_get_connection", side_effect=AssertionError("must not connect")), \
+                self.assertLogs("odoo_service", level="ERROR") as logs:
+            result = O.create_odoo_student({"first_name": "Ali", "email": "a@b.com", "gender": ""})
+        self.assertFalse(result["success"])
+        self.assertIn("gender", result["error"])
+        self.assertIn("gender is missing", "\n".join(logs.output))
+
+    def test_existing_student_does_not_need_gender(self):
+        with mock.patch.object(O, "find_student_by_email", return_value={"id": 7, O.STUDENT_CODE_FIELD: "C1"}):
+            result = O.create_odoo_student({"first_name": "Ali", "email": "a@b.com", "gender": ""})
+        self.assertTrue(result["success"])
+        self.assertTrue(result["already_existed"])
+
+    def test_fault_summary_drops_the_student_row(self):
+        import xmlrpc.client
+        traceback_text = (
+            "Traceback (most recent call last):\n"
+            '  File "/usr/lib/python3/dist-packages/odoo/sql_db.py", line 250, in execute\n'
+            "    res = self._obj.execute(query, params)\n"
+            'psycopg2.IntegrityError: null value in column "gender" of relation "op_student" '
+            "violates not-null constraint\n"
+            "DETAIL:  Failing row contains (65445, null, Secret, null, Student, null, 2026-11-15).\n\n"
+            "During handling of the above exception, another exception occurred:\n\n"
+            "odoo.exceptions.ValidationError: ('Model: Student (op.student), Field: Gender (gender)', None)\n"
+        )
+        summary = O._fault_summary(xmlrpc.client.Fault(1, traceback_text))
+        self.assertIn("IntegrityError", summary)
+        self.assertIn("gender", summary)
+        self.assertNotIn("Secret", summary)
+        self.assertNotIn("65445", summary)
+        self.assertNotIn("DETAIL", summary)
+
+    def test_fault_summary_with_unknown_shape_withholds_details(self):
+        import xmlrpc.client
+        summary = O._fault_summary(xmlrpc.client.Fault(2, "weird text with Ali Hassan inside"))
+        self.assertNotIn("Ali", summary)
 
     def test_no_internal_defaults_in_source(self):
         with open(os.path.join(ROOT, "odoo_service.py"), encoding="utf-8") as handle:

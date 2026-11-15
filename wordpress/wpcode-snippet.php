@@ -95,6 +95,24 @@ function fajr_detect_study_mode($data) {
     return array(null, '');
 }
 
+/**
+ * احتياطي: لو حقل الجنس اسمه مش في القائمة، ندور على أي حقل قيمته بالظبط Male أو Female (أو ذكر / أنثى).
+ * بيشيل الحروف الخفية (زي علامة RTL) قبل المقارنة. بيرجع array(اسم الحقل، القيمة) أو array(null, '').
+ */
+function fajr_detect_gender($data) {
+    $known = array('male', 'female', 'ذكر', 'أنثى', 'انثى', 'أنثي');
+    foreach ($data as $key => $value) {
+        if (!is_string($value)) {
+            continue;
+        }
+        $clean = preg_replace('/[\p{Cf}\s\-_]+/u', '', trim($value));
+        if (is_string($clean) && in_array(strtolower($clean), $known, true)) {
+            return array($key, $value);
+        }
+    }
+    return array(null, '');
+}
+
 function fajr_send_to_webhook($entryId, $formData, $form) {
 
     // نشتغل بس على فورم القبول. أي فورم تاني بيتسجل في اللوج بس (رقمه، بدون أي بيانات)
@@ -131,6 +149,27 @@ function fajr_send_to_webhook($entryId, $formData, $form) {
             fajr_log('study_mode NOT FOUND - request NOT sent. Fields received: ' . implode(', ', array_keys($formData)));
             return;
         }
+    }
+
+    // الجنس إلزامي في Odoo. لو اسم الحقل مش في الـ mapping ندور عليه بقيمته (Male / Female)
+    if ($payload['gender'] === '') {
+        list($gender_key, $gender_value) = fajr_detect_gender($formData);
+        if ($gender_key !== null) {
+            $payload['gender'] = sanitize_text_field($gender_value);
+            fajr_log("gender found in field '{$gender_key}' (not in the mapping). Add '{$gender_key}' to fajr_field_map() to silence this notice.");
+        }
+    }
+
+    // أي حقل مطلوب ملقيناهوش في الفورم: بنسجل أسماؤهم + أسماء كل حقول الفورم (بدون قيم)
+    // عشان نعرف الاسم الصحيح ونضيفه في fajr_field_map()
+    $missing = array();
+    foreach (array_keys(fajr_field_map()) as $target) {
+        if ($payload[$target] === '') {
+            $missing[] = $target;
+        }
+    }
+    if ($missing) {
+        fajr_log('No value found for: ' . implode(', ', $missing) . ' | Field names in the form data: ' . implode(', ', array_keys($formData)));
     }
 
     // لوج بدون بيانات شخصية: أسماء الحقول اللي اتبعتت + إيميل مخفي جزئيًا
