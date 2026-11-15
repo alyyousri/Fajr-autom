@@ -539,6 +539,19 @@ class OdooServiceTests(unittest.TestCase):
         self.assertNotIn("65445", summary)
         self.assertNotIn("DETAIL", summary)
 
+    def test_fault_summary_keeps_builtin_exceptions(self):
+        # أخطاء بايثون العادية (من كود Odoo المخصص) مالهاش اسم موديول قبلها
+        import xmlrpc.client
+        text = (
+            "Traceback (most recent call last):\n"
+            '  File "/mnt/extra-addons/fajr/student_customization/models/op_student.py", line 120, in create\n'
+            "    year = datetime.strptime(vals['birth_date'], '%Y-%m-%d').year\n"
+            "TypeError: strptime() argument 1 must be str, not bool\n"
+        )
+        summary = O._fault_summary(xmlrpc.client.Fault(1, text))
+        self.assertIn("TypeError: strptime() argument 1 must be str, not bool", summary)
+        self.assertNotIn("File", summary)
+
     def test_fault_summary_with_unknown_shape_withholds_details(self):
         import xmlrpc.client
         summary = O._fault_summary(xmlrpc.client.Fault(2, "weird text with Ali Hassan inside"))
