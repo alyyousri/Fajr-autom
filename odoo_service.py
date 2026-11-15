@@ -202,8 +202,8 @@ def find_student_by_email(email):
     return existing[0] if existing else None
 
 
-# سطر الاستثناء داخل الـ traceback اللي Odoo بيرجعه، زي: psycopg2.IntegrityError: ...
-_EXCEPTION_LINE = re.compile(r"^(?:[A-Za-z_][\w]*\.)+[A-Z]\w*(?:Error|Exception|Fault|Warning)\b.*$")
+# سطر الاستثناء داخل الـ traceback اللي Odoo بيرجعه، زي: psycopg2.IntegrityError: ... أو TypeError: ... (من غير اسم موديول)
+_EXCEPTION_LINE = re.compile(r"^(?:[A-Za-z_]\w*\.)*[A-Z]\w*(?:Error|Exception|Fault|Warning)\b.*$")
 
 
 def _fault_summary(fault, limit=400):
@@ -216,7 +216,7 @@ def _fault_summary(fault, limit=400):
     if not lines:
         # شكل مش متوقع: الأسلم مانطبعش النص الخام لأنه ممكن يحتوي بيانات الطالب
         return f"Odoo fault (code {getattr(fault, 'faultCode', '?')}, details withheld)"
-    return " | ".join(lines[:2])[:limit]
+    return " | ".join(line[:200] for line in lines[:2])[:limit]
 
 
 def create_odoo_student(form_data):
