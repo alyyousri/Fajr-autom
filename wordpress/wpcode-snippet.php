@@ -49,7 +49,8 @@ function fajr_field_map() {
         'mobile'         => array('mobile', 'phone'),
         'email'          => array('email'),
         'birth_date'     => array('birth_date', 'date_of_birth'),
-        'gender'         => array('gender'),
+        // اسم حقل الجنس في فورم القبول (Name Attribute في Fluent Forms) هو input_radio
+        'gender'         => array('gender', 'input_radio'),
         'study_mode'     => array('study_mode', 'studyMode', 'study_type'),
         // موعد اختبار تحديد المستوى اللي الطالب اختاره من الكالندر (اختياري)
         'placement_slot' => array('placement_slot', 'placement_date', 'exam_date'),
