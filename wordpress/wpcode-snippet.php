@@ -48,12 +48,14 @@ function fajr_field_map() {
         'arabic_name'    => array('arabic_name'),
         'mobile'         => array('mobile', 'phone'),
         'email'          => array('email'),
-        'birth_date'     => array('birth_date', 'date_of_birth'),
+        // Date of birth في فورم القبول: Name Attribute = datetime_1
+        'birth_date'     => array('birth_date', 'date_of_birth', 'datetime_1'),
         // اسم حقل الجنس في فورم القبول (Name Attribute في Fluent Forms) هو input_radio
         'gender'         => array('gender', 'input_radio'),
         'study_mode'     => array('study_mode', 'studyMode', 'study_type'),
         // موعد اختبار تحديد المستوى اللي الطالب اختاره من الكالندر (اختياري)
-        'placement_slot' => array('placement_slot', 'placement_date', 'exam_date'),
+        // كالندر الحجز (Fluent Booking) في الفورم: Name Attribute = fcal_booking
+        'placement_slot' => array('placement_slot', 'placement_date', 'exam_date', 'fcal_booking'),
     );
 }
 
