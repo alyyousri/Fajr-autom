@@ -223,28 +223,29 @@ def send_email(to_email, to_name, subject, body):
         return False
 
 
-# ----- قوالب الإيميلات (كل قيمة جاية من المستخدم بتتعمل escape) -----
-_WRAP_OPEN = '<div style="font-family: Arial; direction: rtl; text-align: right;">'
+# ----- قوالب الإيميلات (إنجليزي لأن الطلاب دارسو عربية والفورم إنجليزي) -----
+# كل قيمة جاية من المستخدم بتتعمل escape
+_WRAP_OPEN = '<div style="font-family: Arial; direction: ltr; text-align: left;">'
 _LTR = 'style="direction: ltr; unicode-bidi: embed;"'
 
 
 def _student_code_html(student_code):
     if not student_code:
         return ""
-    return f"<p><b>كود الطالب:</b> <span {_LTR}>{html.escape(student_code)}</span></p>"
+    return f"<p><b>Student code:</b> <span {_LTR}>{html.escape(student_code)}</span></p>"
 
 
 def _exists_body(first_name, student_code):
     return f"""
     {_WRAP_OPEN}
-        <h2>مرحباً {html.escape(first_name)}،</h2>
-        <p>أنت مسجل بالفعل في <b>Fajr Online</b>.</p>
+        <h2>Hello {html.escape(first_name)},</h2>
+        <p>You are already registered at <b>Fajr Online</b>.</p>
         {_student_code_html(student_code)}
-        <p>يمكنك الدخول من هنا:
+        <p>You can log in here:
         <a href="https://learn.fajr.com">learn.fajr.com</a></p>
-        <p>لو نسيت الباسورد:
-        <a href="https://learn.fajr.com/login/forgot_password.php">اضغط هنا</a></p>
-        <p>لو في مشكلة تواصل معنا على info@fajr.com</p>
+        <p>Forgot your password?
+        <a href="https://learn.fajr.com/login/forgot_password.php">Click here</a></p>
+        <p>If you have any problem, contact us at info@fajr.com</p>
     </div>
     """
 
@@ -252,31 +253,31 @@ def _exists_body(first_name, student_code):
 def _welcome_body(first_name, email, password, student_code, placement_slot):
     if placement_slot:
         placement_html = (
-            f"<p>موعد اختبار تحديد المستوى الذي اخترته: "
+            f"<p>Your placement test time: "
             f"<b><span {_LTR}>{html.escape(placement_slot)}</span></b></p>"
         )
     else:
-        placement_html = "<p>موعد اختبار تحديد المستوى: حسب الموعد الذي اخترته في نموذج التسجيل.</p>"
+        placement_html = "<p>Your placement test time: as selected in the registration form.</p>"
 
     change_note = (
-        "<p>ستُطلب منك تغيير كلمة المرور عند أول دخول.</p>" if FORCE_PASSWORD_CHANGE else ""
+        "<p>You will be asked to change your password the first time you log in.</p>" if FORCE_PASSWORD_CHANGE else ""
     )
 
     return f"""
     {_WRAP_OPEN}
-        <h2>مرحباً {html.escape(first_name)}،</h2>
-        <p>تم تسجيلك بنجاح في <b>Fajr Online</b>!</p>
+        <h2>Hello {html.escape(first_name)},</h2>
+        <p>You have been successfully registered at <b>Fajr Online</b>!</p>
         <hr>
         {_student_code_html(student_code)}
-        <h3>بيانات الدخول:</h3>
+        <h3>Your login details:</h3>
         <p><b>Username:</b> <span {_LTR}>{html.escape(email)}</span></p>
         <p><b>Password:</b> <span {_LTR}>{html.escape(password)}</span></p>
         {change_note}
-        <p><b>رابط الدخول:</b>
+        <p><b>Login link:</b>
         <a href="https://learn.fajr.com">learn.fajr.com</a></p>
         <hr>
         {placement_html}
-        <p>لو في أي استفسار تواصل معنا على info@fajr.com</p>
+        <p>If you have any questions, contact us at info@fajr.com</p>
     </div>
     """
 
@@ -396,7 +397,7 @@ def webhook():
     if existing_user:
         user_id = existing_user["id"]
         logger.info("Moodle: user already exists (id=%s)", user_id)
-        if not send_email(email, first_name, "أنت مسجل بالفعل في Fajr Online",
+        if not send_email(email, first_name, "You are already registered at Fajr Online",
                           _exists_body(first_name, student_code)):
             warnings.append("email_failed")
         return _response("exists", warnings, user_id, odoo_result)
@@ -465,7 +466,7 @@ def webhook():
             warnings.append("group_failed")
 
     # ---- 10) إيميل الترحيب ----
-    if not send_email(email, first_name, "مرحباً بك في Fajr Online 🎉",
+    if not send_email(email, first_name, "Welcome to Fajr Online 🎉",
                       _welcome_body(first_name, email, password, student_code, placement_slot)):
         # كلمة المرور مش متخزنة في أي مكان: لازم يعمل "نسيت كلمة المرور" أو يتم إعادة تعيينها
         warnings.append("email_failed")
