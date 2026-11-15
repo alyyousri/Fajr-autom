@@ -321,7 +321,10 @@ def webhook():
     if not isinstance(data, dict):
         data = request.form.to_dict()
     # بنسجل أسماء الحقول فقط (بدون بيانات الطالب)
-    logger.info("Webhook received, fields: %s", sorted(data.keys()))
+    # الحقل الفاضي بيوصل كمفتاح بدون قيمة، فنفصله عشان مايبانش كأنه اتبعت
+    filled = sorted(k for k, v in data.items() if v not in ("", None, [], {}))
+    empty = sorted(k for k in data if k not in filled)
+    logger.info("Webhook received, fields: %s, empty: %s", filled, empty)
 
     # ---- 3) التسجيل لقسم الأون لاين فقط ----
     raw_mode = _first_value(data, STUDY_MODE_KEYS)

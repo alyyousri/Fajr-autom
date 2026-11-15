@@ -32,6 +32,10 @@ The snippet uses the `wp-config.php` value when it exists, so the snippet text c
 `study_mode` (Online / On-site – the server ignores On-site) and `placement_slot` (optional).
 Field names are matched in `fajr_field_map()`; add your form's field name there if it differs.
 If `study_mode` cannot be found, nothing is sent and the log lists the field names that were received.
+`gender` is required by Odoo (`op.student.gender` is NOT NULL). If its field name is not in the mapping, the snippet looks
+for any field whose value is exactly Male / Female and logs `gender found in field '...'`. Whenever a field has no value,
+the log shows `No value found for: <fields> | Field names in the form data: <names>` (names only, no values) so the
+right name can be added to `fajr_field_map()`.
 
 ## Logs
 The snippet writes `[Fajr Webhook] ...` lines with `error_log()` (hosting PHP error log, or
