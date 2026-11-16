@@ -3,6 +3,7 @@ odoo_service.py
 الاتصال بـ Odoo وإنشاء Student جديد (op.student) بعد التسجيل في Moodle
 """
 import datetime
+import http.client
 import logging
 import os
 import re
@@ -31,7 +32,7 @@ ODOO_DB = os.getenv("ODOO_DB", "").strip()
 ODOO_USERNAME = os.getenv("ODOO_USERNAME", "").strip()
 # ممكن تحط هنا API key بدل كلمة المرور (Odoo بيقبل الاتنين في XML-RPC)
 ODOO_PASSWORD = os.getenv("ODOO_PASSWORD", "").strip()
-ODOO_TIMEOUT = _int_env("ODOO_TIMEOUT", "30")  # ثواني
+ODOO_TIMEOUT = _int_env("ODOO_TIMEOUT", "10")  # ثواني (لكل عملية اتصال)
 
 # ===== Defaults الثابتة (قسم الأون لاين) - ممكن تتغير من متغيرات البيئة =====
 ODOO_CATEGORY_ID = _int_env("ODOO_CATEGORY_ID", "40")    # Online Group (op.category)
@@ -52,6 +53,18 @@ DATE_ORDER = os.getenv("BIRTH_DATE_ORDER", "dmy").strip().lower()
 
 class OdooConnectionError(Exception):
     pass
+
+
+def _is_transient_error(exc):
+    """
+    هل الفشل مؤقت (Odoo واقع / مشغول / الشبكة قطعت) فيستاهل إعادة المحاولة بعد شوية؟
+    أخطاء الإعدادات (OdooConnectionError) وأخطاء البيانات (Fault) هتفشل بنفس الشكل لو أعدناها، فمش مؤقتة.
+    """
+    if isinstance(exc, OdooConnectionError):
+        return False
+    if isinstance(exc, xmlrpc.client.ProtocolError):
+        return exc.errcode >= 500 or exc.errcode == 429
+    return isinstance(exc, (OSError, http.client.HTTPException))  # TimeoutError, ConnectionError, DNS, SSL...
 
 
 # ===== تطبيع الجنس (مشترك مع app.py عشان نفس القاعدة تتطبق في Moodle و Odoo) =====
@@ -316,4 +329,4 @@ def create_odoo_student(form_data):
         return {"success": False, "error": summary}
     except Exception as e:
         logger.error("Odoo unexpected error (%s): %s", type(e).__name__, e)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": str(e), "retryable": _is_transient_error(e)}
