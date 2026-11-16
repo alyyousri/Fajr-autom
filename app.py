@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 
 import requests
 import sib_api_v3_sdk
@@ -48,6 +49,11 @@ REQUEST_TIMEOUT = _int_env("REQUEST_TIMEOUT", "20")
 
 # إلزامي: الـ webhook بيرفض أي طلب مفيهوش نفس الـ secret (هيدر X-Webhook-Token)
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
+
+# لو Odoo كان واقع/مشغول وقت التسجيل: نعيد محاولة إنشاء الطالب فيه بعد كام دقيقة
+# (التسجيل في Moodle والإيميل بيتموا في كل الأحوال). ODOO_RETRY_MAX_ATTEMPTS=0 بيوقف الميزة
+ODOO_RETRY_DELAY_MINUTES = _int_env("ODOO_RETRY_DELAY_MINUTES", "20")
+ODOO_RETRY_MAX_ATTEMPTS = _int_env("ODOO_RETRY_MAX_ATTEMPTS", "3")
 
 # إعدادات Moodle
 MOODLE_COURSE_ID = _int_env("MOODLE_COURSE_ID", "20")   # كورس تحديد المستوى
@@ -184,6 +190,56 @@ def moodle_call(wsfunction, params):
         raise MoodleError(f"{wsfunction}: {code}")
 
     return result  # بعض الدوال (enrol / group) بترجع null عند النجاح
+
+
+# ----- إعادة محاولة Odoo -----
+# القائمة في الذاكرة بس: بتضيع لو الخدمة اتعمللها restart أو deploy قبل ما المحاولة تحصل.
+# بيانات الطالب مابتتكتبش على القرص ولا في اللوج.
+_retry_lock = threading.Lock()
+_pending_odoo_retries = {}  # email -> Timer
+
+
+def _schedule_odoo_retry(email, student, attempt):
+    """يجدول المحاولة رقم attempt لإنشاء الطالب في Odoo (مرة واحدة بس لكل إيميل في نفس الوقت)"""
+    if ODOO_RETRY_MAX_ATTEMPTS <= 0 or attempt > ODOO_RETRY_MAX_ATTEMPTS:
+        return
+    with _retry_lock:
+        if email in _pending_odoo_retries:
+            return
+        timer = threading.Timer(
+            ODOO_RETRY_DELAY_MINUTES * 60, _run_odoo_retry, args=(email, student, attempt)
+        )
+        timer.daemon = True
+        _pending_odoo_retries[email] = timer
+        timer.start()
+    logger.warning(
+        "Odoo retry %d/%d scheduled in %d min for %s",
+        attempt, ODOO_RETRY_MAX_ATTEMPTS, ODOO_RETRY_DELAY_MINUTES, _mask_email(email),
+    )
+
+
+def _run_odoo_retry(email, student, attempt):
+    with _retry_lock:
+        _pending_odoo_retries.pop(email, None)
+    try:
+        result = create_odoo_student(student)
+    except Exception:
+        logger.exception("Odoo retry crashed")
+        result = {"success": False}
+    if result.get("success"):
+        logger.info(
+            "Odoo retry %d/%d succeeded for %s (id=%s)",
+            attempt, ODOO_RETRY_MAX_ATTEMPTS, _mask_email(email), result.get("odoo_student_id"),
+        )
+        return
+    if result.get("retryable") and attempt < ODOO_RETRY_MAX_ATTEMPTS:
+        logger.warning("Odoo retry %d/%d failed for %s", attempt, ODOO_RETRY_MAX_ATTEMPTS, _mask_email(email))
+        _schedule_odoo_retry(email, student, attempt + 1)
+    else:
+        logger.error(
+            "Odoo retry GAVE UP for %s after %d attempt(s): add this student to Odoo manually",
+            _mask_email(email), attempt,
+        )
 
 
 def _find_exact_user(found, email):
@@ -357,16 +413,17 @@ def webhook():
     # ---- 5) Odoo: إنشاء/تأكيد الطالب ----
     # بيحصل بغض النظر عن حالة الطالب في Moodle (وجوده في Moodle مش معناه إنه في Odoo)
     # خطأ Odoo مايوقفش التسجيل في Moodle، بس بيظهر في warnings واللوج
+    odoo_student = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "arabic_name": arabic_name,
+        "mobile": mobile,
+        "email": email,
+        "birth_date": birth_date,
+        "gender": gender,
+    }
     try:
-        odoo_result = create_odoo_student({
-            "first_name": first_name,
-            "last_name": last_name,
-            "arabic_name": arabic_name,
-            "mobile": mobile,
-            "email": email,
-            "birth_date": birth_date,
-            "gender": gender,
-        })
+        odoo_result = create_odoo_student(odoo_student)
     except Exception:
         logger.exception("Odoo call crashed")
         odoo_result = {"success": False}
@@ -379,6 +436,8 @@ def webhook():
     else:
         logger.error("Odoo failed: %s", odoo_result.get("error"))
         warnings.append("odoo_failed")
+        if odoo_result.get("retryable"):  # Odoo واقع/مشغول: هنعيد المحاولة بعد شوية
+            _schedule_odoo_retry(email, odoo_student, 1)
 
     student_code = odoo_result.get("gr_no") or ""
 

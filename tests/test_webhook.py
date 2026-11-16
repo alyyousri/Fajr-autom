@@ -479,6 +479,126 @@ class FailureTests(WebhookTestCase):
         self.assertIn("core_user_create_users", self.moodle.functions())
 
 
+# ---------------------------------------------------------------- إعادة محاولة Odoo
+class FakeTimer:
+    """بديل threading.Timer: يسجل الجدولة وننفذ الدالة بإيدينا بدل ما نستنى 20 دقيقة"""
+    created = []
+
+    def __init__(self, interval, function, args=()):
+        self.interval, self.function, self.args = interval, function, tuple(args)
+        self.daemon = False
+        self.started = False
+        FakeTimer.created.append(self)
+
+    def start(self):
+        self.started = True
+
+    def run_now(self):
+        self.function(*self.args)
+
+
+TRANSIENT = {"success": False, "error": "timed out", "retryable": True}
+
+
+class OdooRetryTests(WebhookTestCase):
+    def setUp(self):
+        super().setUp()
+        FakeTimer.created = []
+        A._pending_odoo_retries.clear()
+        for patcher in (
+            mock.patch.object(A.threading, "Timer", FakeTimer),
+            mock.patch.object(A, "ODOO_RETRY_DELAY_MINUTES", 20),
+            mock.patch.object(A, "ODOO_RETRY_MAX_ATTEMPTS", 3),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(A._pending_odoo_retries.clear)
+
+    def test_transient_failure_schedules_a_retry_after_20_minutes(self):
+        self.odoo.return_value = TRANSIENT
+        body = self.send().get_json()
+        self.assertEqual(body["status"], "partial")            # Moodle والإيميل اتعملوا
+        self.assertIn("odoo_failed", body["warnings"])
+        self.assertIn("core_user_create_users", self.moodle.functions())
+        self.assertEqual(len(FakeTimer.created), 1)
+        timer = FakeTimer.created[0]
+        self.assertEqual(timer.interval, 20 * 60)
+        self.assertTrue(timer.started and timer.daemon)
+        self.assertEqual(timer.args[0], "ali@example.com")
+        self.assertEqual(timer.args[2], 1)
+
+    def test_non_transient_failure_is_not_retried(self):
+        self.odoo.return_value = {"success": False, "error": "gender missing or unrecognized"}
+        self.send()
+        self.assertEqual(FakeTimer.created, [])
+
+    def test_success_is_not_retried(self):
+        self.send()
+        self.assertEqual(FakeTimer.created, [])
+
+    def test_retry_can_be_disabled(self):
+        self.odoo.return_value = TRANSIENT
+        with mock.patch.object(A, "ODOO_RETRY_MAX_ATTEMPTS", 0):
+            self.send()
+        self.assertEqual(FakeTimer.created, [])
+
+    def test_same_student_waits_in_one_retry_only(self):
+        self.odoo.return_value = TRANSIENT
+        self.send()
+        self.send()
+        self.assertEqual(len(FakeTimer.created), 1)
+
+    def test_retry_sends_the_same_student_data_to_odoo(self):
+        self.odoo.return_value = TRANSIENT
+        self.send()
+        first_call = self.odoo.call_args[0][0]
+        self.odoo.reset_mock()
+        self.odoo.return_value = {"success": True, "odoo_student_id": 9, "already_existed": False}
+        FakeTimer.created[0].run_now()
+        self.odoo.assert_called_once_with(first_call)
+
+    def test_successful_retry_stops_and_logs(self):
+        self.odoo.return_value = TRANSIENT
+        self.send()
+        self.odoo.return_value = {"success": True, "odoo_student_id": 9, "already_existed": False}
+        with self.assertLogs("fajr", level="INFO") as logs:
+            FakeTimer.created[0].run_now()
+        self.assertEqual(len(FakeTimer.created), 1)             # مفيش جدولة تانية
+        self.assertIn("Odoo retry 1/3 succeeded", "\n".join(logs.output))
+
+    def test_failed_retries_repeat_then_give_up(self):
+        self.odoo.return_value = TRANSIENT
+        self.send()
+        for expected_attempt in (1, 2):
+            FakeTimer.created[-1].run_now()
+            self.assertEqual(FakeTimer.created[-1].args[2], expected_attempt + 1)
+        with self.assertLogs("fajr", level="ERROR") as logs:
+            FakeTimer.created[-1].run_now()                      # المحاولة الثالثة والأخيرة
+        self.assertEqual(len(FakeTimer.created), 3)
+        self.assertIn("GAVE UP", "\n".join(logs.output))
+        self.assertIn("manually", "\n".join(logs.output))
+
+    def test_non_transient_retry_failure_gives_up_at_once(self):
+        self.odoo.return_value = TRANSIENT
+        self.send()
+        self.odoo.return_value = {"success": False, "error": "some data error"}
+        with self.assertLogs("fajr", level="ERROR") as logs:
+            FakeTimer.created[0].run_now()
+        self.assertEqual(len(FakeTimer.created), 1)
+        self.assertIn("GAVE UP", "\n".join(logs.output))
+
+    def test_retry_logs_do_not_contain_student_data(self):
+        self.odoo.return_value = TRANSIENT
+        with self.assertLogs("fajr", level="INFO") as logs:
+            self.send()
+            FakeTimer.created[0].run_now()
+            FakeTimer.created[-1].run_now()
+        text = "\n".join(logs.output)
+        self.assertNotIn("ali@example.com", text)
+        self.assertNotIn("Hassan", text)
+        self.assertNotIn("+201000000000", text)
+
+
 # ---------------------------------------------------------------- odoo_service
 class OdooServiceTests(unittest.TestCase):
     def test_date_formats(self):
@@ -556,6 +676,37 @@ class OdooServiceTests(unittest.TestCase):
         import xmlrpc.client
         summary = O._fault_summary(xmlrpc.client.Fault(2, "weird text with Ali Hassan inside"))
         self.assertNotIn("Ali", summary)
+
+    def test_transient_errors_are_classified(self):
+        import socket
+        import xmlrpc.client
+        transient = [
+            TimeoutError("timed out"), socket.timeout("timed out"), ConnectionRefusedError(),
+            ConnectionResetError(), socket.gaierror("dns"), xmlrpc.client.ProtocolError("u", 502, "bad gateway", {}),
+            xmlrpc.client.ProtocolError("u", 503, "unavailable", {}),
+        ]
+        permanent = [
+            O.OdooConnectionError("auth failed"), xmlrpc.client.Fault(1, "data error"), ValueError("x"),
+            xmlrpc.client.ProtocolError("u", 404, "not found", {}),
+        ]
+        for exc in transient:
+            with self.subTest(exc=repr(exc)):
+                self.assertTrue(O._is_transient_error(exc))
+        for exc in permanent:
+            with self.subTest(exc=repr(exc)):
+                self.assertFalse(O._is_transient_error(exc))
+
+    def test_timeout_result_is_marked_retryable(self):
+        with mock.patch.object(O, "find_student_by_email", side_effect=TimeoutError("timed out")):
+            result = O.create_odoo_student({"first_name": "Ali", "email": "a@b.com", "gender": "Male"})
+        self.assertFalse(result["success"])
+        self.assertTrue(result["retryable"])
+
+    def test_configuration_error_is_not_retryable(self):
+        with mock.patch.object(O, "find_student_by_email", side_effect=O.OdooConnectionError("auth failed")):
+            result = O.create_odoo_student({"first_name": "Ali", "email": "a@b.com", "gender": "Male"})
+        self.assertFalse(result["success"])
+        self.assertFalse(result.get("retryable"))
 
     def test_no_internal_defaults_in_source(self):
         with open(os.path.join(ROOT, "odoo_service.py"), encoding="utf-8") as handle:

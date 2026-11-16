@@ -52,6 +52,18 @@ Copy `.env.example` to `.env` and fill it. Required: `MOODLE_URL`, `MOODLE_TOKEN
 `ODOO_URL`, `ODOO_DB`, `ODOO_USERNAME`, `ODOO_PASSWORD`, `WEBHOOK_SECRET`.
 Optional settings (course/group/branch IDs, date order, timeouts) are listed in `.env.example`.
 
+### If Odoo is down or slow
+
+Each Odoo call waits at most `ODOO_TIMEOUT` seconds (default 10). If Odoo does not answer (timeout, network error,
+502/503), registration still completes in Moodle and the welcome email is sent (without a student code), the response
+carries the `odoo_failed` warning, and the student is queued for a retry: after `ODOO_RETRY_DELAY_MINUTES` (default 20)
+the service tries to create the student in Odoo again, up to `ODOO_RETRY_MAX_ATTEMPTS` times (default 3, `0` disables it).
+Log lines: `Odoo retry n/N scheduled`, `... succeeded`, and `Odoo retry GAVE UP ... add this student to Odoo manually`.
+
+Limits: the retry queue lives in memory only, so a restart or deploy of the service drops pending retries; errors caused
+by the data itself (missing gender, Odoo validation errors) are not retried. A retry never creates a duplicate: the student
+is looked up by email first.
+
 Before going live:
 - the sender domain of `info@fajr.com` must be verified in Brevo (SPF/DKIM);
 - if the Moodle web-service token or Brevo is restricted by IP, allow the server's IP.
