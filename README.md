@@ -52,6 +52,13 @@ Copy `.env.example` to `.env` and fill it. Required: `MOODLE_URL`, `MOODLE_TOKEN
 `ODOO_URL`, `ODOO_DB`, `ODOO_USERNAME`, `ODOO_PASSWORD`, `WEBHOOK_SECRET`.
 Optional settings (course/group/branch IDs, date order, timeouts) are listed in `.env.example`.
 
+### Team copy of student emails
+
+Set `TEAM_COPY_EMAIL` (an environment variable, not code, because this repository is public) and every email sent to a
+student (welcome and "already registered") is also delivered to that address as a BCC, so the team can follow up. Leave it
+empty for no copy. The copy shows the student's address in the *To* header. Note that the welcome email contains the
+student's temporary password. If a copy is rejected, the student's email is still sent without it.
+
 ### If Odoo is down or slow
 
 Each Odoo call waits at most `ODOO_TIMEOUT` seconds (default 10). If Odoo does not answer (timeout, network error,

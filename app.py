@@ -63,6 +63,10 @@ MOODLE_GROUP_FEMALE = _int_env("MOODLE_GROUP_FEMALE", "1")
 # يجبر الطالب على تغيير كلمة المرور عند أول دخول
 FORCE_PASSWORD_CHANGE = os.getenv("FORCE_PASSWORD_CHANGE", "true").strip().lower() != "false"
 
+# نسخة (BCC) من كل إيميل بيتبعت للطالب بتروح لإيميل الفريق عشان يتابعوا. اختياري: لو فاضي مفيش نسخة.
+# بنحطه في متغير بيئة (مش في الكود) لأن الريبو عام.
+TEAM_COPY_EMAIL = (os.getenv("TEAM_COPY_EMAIL") or "").strip()
+
 SENDER_EMAIL = "info@fajr.com"
 SENDER_NAME = "Fajr Online"
 
@@ -256,8 +260,28 @@ def _find_exact_user(found, email):
 
 
 # ----- Brevo -----
+_EMAIL_SHAPE = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$")
+
+
+def _team_copy_address(student_email):
+    """إيميل الفريق اللي هتروحله نسخة (BCC)، أو None لو مش مضبوط/غلط/هو نفس إيميل الطالب"""
+    if not TEAM_COPY_EMAIL:
+        return None
+    if not _EMAIL_SHAPE.match(TEAM_COPY_EMAIL):
+        logger.warning("TEAM_COPY_EMAIL is not a valid email address - no team copy is sent")
+        return None
+    if TEAM_COPY_EMAIL.lower() == str(student_email).strip().lower():
+        return None
+    return TEAM_COPY_EMAIL
+
+
 def send_email(to_email, to_name, subject, body):
-    """يرجع True لو الإيميل اتبعت، وFalse لو فشل لأي سبب (مع تسجيل السبب)"""
+    """
+    يرجع True لو الإيميل اتبعت للطالب، وFalse لو فشل لأي سبب (مع تسجيل السبب).
+    لو TEAM_COPY_EMAIL مضبوط بتروح نسخة BCC منه لإيميل الفريق؛ ولو الإرسال فشل بسببها
+    بنعيد إرسال إيميل الطالب من غيرها عشان الطالب مايتأثرش.
+    """
+    team_copy = _team_copy_address(to_email)
     try:
         configuration = sib_api_v3_sdk.Configuration()
         configuration.api_key["api-key"] = BREVO_API_KEY
@@ -265,14 +289,31 @@ def send_email(to_email, to_name, subject, body):
         api_instance = sib_api_v3_sdk.TransactionalEmailsApi(
             sib_api_v3_sdk.ApiClient(configuration)
         )
-        message = sib_api_v3_sdk.SendSmtpEmail(
-            to=[{"email": to_email, "name": to_name}],
-            sender={"email": SENDER_EMAIL, "name": SENDER_NAME},
-            subject=subject,
-            html_content=body,
-        )
-        api_instance.send_transac_email(message, _request_timeout=REQUEST_TIMEOUT)
-        logger.info("Email sent to %s", _mask_email(to_email))
+
+        def _send(bcc):
+            fields = dict(
+                to=[{"email": to_email, "name": to_name}],
+                sender={"email": SENDER_EMAIL, "name": SENDER_NAME},
+                subject=subject,
+                html_content=body,
+            )
+            if bcc:
+                fields["bcc"] = [{"email": bcc}]
+            api_instance.send_transac_email(
+                sib_api_v3_sdk.SendSmtpEmail(**fields), _request_timeout=REQUEST_TIMEOUT
+            )
+
+        try:
+            _send(team_copy)
+        except Exception as exc:
+            if not team_copy:
+                raise
+            logger.warning(
+                "Email with team copy failed (%s) - retrying without the team copy", type(exc).__name__
+            )
+            _send(None)
+            team_copy = None
+        logger.info("Email sent to %s%s", _mask_email(to_email), " (+team copy)" if team_copy else "")
         return True
     except Exception as exc:  # ApiException و timeouts وأي خطأ شبكة
         logger.error("Email error for %s (%s): %s", _mask_email(to_email), type(exc).__name__, exc)
