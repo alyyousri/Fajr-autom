@@ -83,6 +83,7 @@ class FakeMoodle:
 class FakeMailAPI:
     sent = []
     error = None
+    reject_bcc = False  # يحاكي رفض Brevo للإيميل لو فيه BCC
 
     def __init__(self, client):
         pass
@@ -90,6 +91,8 @@ class FakeMailAPI:
     def send_transac_email(self, message, **kwargs):
         if FakeMailAPI.error:
             raise FakeMailAPI.error
+        if FakeMailAPI.reject_bcc and message.kw.get("bcc"):
+            raise RuntimeError("bcc rejected")
         FakeMailAPI.sent.append(message.kw)
 
 
@@ -121,6 +124,7 @@ class WebhookTestCase(unittest.TestCase):
         self.moodle = FakeMoodle()
         FakeMailAPI.sent = []
         FakeMailAPI.error = None
+        FakeMailAPI.reject_bcc = False
         self.odoo = mock.Mock(return_value={
             "success": True, "odoo_student_id": 7, "gr_no": "FM-2005-NCR-001634", "already_existed": False,
         })
@@ -404,6 +408,59 @@ class EmailTests(WebhookTestCase):
         html_content = FakeMailAPI.sent[0]["html_content"]
         self.assertNotIn("سيتم التواصل معك", html_content)
         self.assertIn("as selected in the registration form", html_content)
+
+
+class TeamCopyTests(WebhookTestCase):
+    TEAM = "team@example.com"
+
+    def test_no_copy_when_not_configured(self):
+        with mock.patch.object(A, "TEAM_COPY_EMAIL", ""):
+            self.send()
+        self.assertNotIn("bcc", FakeMailAPI.sent[0])
+
+    def test_welcome_email_is_copied_to_the_team(self):
+        with mock.patch.object(A, "TEAM_COPY_EMAIL", self.TEAM):
+            self.send()
+        sent = FakeMailAPI.sent[0]
+        self.assertEqual(sent["to"][0]["email"], "ali@example.com")
+        self.assertEqual(sent["bcc"], [{"email": self.TEAM}])
+        self.assertIn("Welcome", sent["subject"])
+
+    def test_already_registered_email_is_copied_too(self):
+        self.moodle.users = [{"id": 5, "email": "ali@example.com"}]
+        with mock.patch.object(A, "TEAM_COPY_EMAIL", self.TEAM):
+            body = self.send().get_json()
+        self.assertEqual(body["status"], "exists")
+        self.assertEqual(FakeMailAPI.sent[0]["bcc"], [{"email": self.TEAM}])
+        self.assertIn("already registered", FakeMailAPI.sent[0]["subject"])
+
+    def test_invalid_team_address_is_ignored(self):
+        for bad in ("not-an-email", "a@b", "x@y.com, z@w.com"):
+            with self.subTest(bad=bad), mock.patch.object(A, "TEAM_COPY_EMAIL", bad):
+                FakeMailAPI.sent = []
+                self.send()
+                self.assertNotIn("bcc", FakeMailAPI.sent[0])
+
+    def test_no_bcc_when_the_student_is_the_team_address(self):
+        with mock.patch.object(A, "TEAM_COPY_EMAIL", "ali@example.com"):
+            self.send()
+        self.assertNotIn("bcc", FakeMailAPI.sent[0])
+
+    def test_student_email_still_goes_out_if_the_copy_is_rejected(self):
+        FakeMailAPI.reject_bcc = True
+        with mock.patch.object(A, "TEAM_COPY_EMAIL", self.TEAM), self.assertLogs("fajr", level="WARNING") as logs:
+            body = self.send().get_json()
+        self.assertEqual(body["status"], "success")
+        self.assertEqual(len(FakeMailAPI.sent), 1)
+        self.assertNotIn("bcc", FakeMailAPI.sent[0])
+        self.assertIn("without the team copy", "\n".join(logs.output))
+
+    def test_log_never_shows_the_team_address(self):
+        with mock.patch.object(A, "TEAM_COPY_EMAIL", self.TEAM), self.assertLogs("fajr", level="INFO") as logs:
+            self.send()
+        text = "\n".join(logs.output)
+        self.assertIn("+team copy", text)
+        self.assertNotIn(self.TEAM, text)
 
 
 # ---------------------------------------------------------------- الأخطاء
