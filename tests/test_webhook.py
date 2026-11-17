@@ -348,6 +348,30 @@ class FlowTests(WebhookTestCase):
         self.assertEqual(len(FakeMailAPI.sent), 1)
         self.assertIn("already registered", FakeMailAPI.sent[0]["subject"])
 
+    def test_exists_email_tells_the_student_to_log_in_and_has_no_reset_link(self):
+        self.moodle.users = [{"id": 5, "email": "ali@example.com", "username": "ali@example.com"}]
+        self.send()
+        html_content = FakeMailAPI.sent[0]["html_content"]
+        self.assertIn("ali@example.com", html_content)                      # اليوزر نيم
+        self.assertIn("the password you registered with on the platform", html_content)
+        self.assertIn("https://learn.fajr.com", html_content)
+        self.assertNotIn("forgot_password", html_content)
+        self.assertNotIn("Forgot your password", html_content)
+        self.assertNotIn("Click here", html_content)
+
+    def test_exists_email_shows_the_real_moodle_username_when_it_differs(self):
+        # حسابات قديمة ممكن يكون اليوزر نيم فيها مختلف عن الإيميل
+        self.moodle.users = [{"id": 5, "email": "ali@example.com", "username": "ali.hassan77"}]
+        self.send()
+        self.assertIn("ali.hassan77", FakeMailAPI.sent[0]["html_content"])
+
+    def test_exists_email_never_contains_a_password_value(self):
+        self.moodle.users = [{"id": 5, "email": "ali@example.com", "username": "ali@example.com"}]
+        self.send()
+        # الباسورد المولّد للطلاب الجدد مايظهرش أبدًا هنا، ومفيش أي إنشاء/تغيير للباسورد في Moodle
+        self.assertNotIn("core_user_create_users", self.moodle.functions())
+        self.assertNotIn("core_user_update_users", self.moodle.functions())
+
     def test_lookup_requires_exact_email_match(self):
         # البحث ممكن يرجع إيميل قريب (_ كـ wildcard) - ده مش نفس الطالب
         self.moodle.users = [{"id": 5, "email": "johnXdoe@example.com"}]

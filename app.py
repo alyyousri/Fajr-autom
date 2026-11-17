@@ -332,17 +332,18 @@ def _student_code_html(student_code):
     return f"<p><b>Student code:</b> <span {_LTR}>{html.escape(student_code)}</span></p>"
 
 
-def _exists_body(first_name, student_code):
+def _exists_body(first_name, student_code, username):
+    # مفيش باسورد هنا: Moodle مابيحتفظش بيه بشكل يتقري، وبنطلب من الطالب يدخل بباسورده المسجل
     return f"""
     {_WRAP_OPEN}
         <h2>Hello {html.escape(first_name)},</h2>
         <p>You are already registered at <b>Fajr Online</b>.</p>
         {_student_code_html(student_code)}
-        <p>You can log in here:
-        <a href="https://learn.fajr.com">learn.fajr.com</a></p>
-        <p>Forgot your password?
-        <a href="https://learn.fajr.com/login/forgot_password.php">Click here</a></p>
-        <p>If you have any problem, contact us at info@fajr.com</p>
+        <p>Please log in at <a href="https://learn.fajr.com">learn.fajr.com</a>
+        with your existing account:</p>
+        <p><b>Username:</b> <span {_LTR}>{html.escape(username)}</span></p>
+        <p><b>Password:</b> the password you registered with on the platform</p>
+        <p>If you have any problem logging in, contact us at info@fajr.com</p>
     </div>
     """
 
@@ -498,7 +499,7 @@ def webhook():
         user_id = existing_user["id"]
         logger.info("Moodle: user already exists (id=%s)", user_id)
         if not send_email(email, first_name, "You are already registered at Fajr Online",
-                          _exists_body(first_name, student_code)):
+                          _exists_body(first_name, student_code, existing_user.get("username") or email)):
             warnings.append("email_failed")
         return _response("exists", warnings, user_id, odoo_result)
 
