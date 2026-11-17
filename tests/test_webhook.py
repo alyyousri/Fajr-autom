@@ -5,6 +5,7 @@
     python -m unittest discover -s tests -v
 """
 import os
+import re
 import sys
 import types
 import unittest
@@ -461,6 +462,293 @@ class TeamCopyTests(WebhookTestCase):
         text = "\n".join(logs.output)
         self.assertIn("+team copy", text)
         self.assertNotIn(self.TEAM, text)
+
+
+# ---------------------------------------------------------------- إعادة تعيين كلمة المرور
+class ResetTokenTests(unittest.TestCase):
+    SECRET = "s3cret"
+
+    def test_roundtrip_normalizes_the_email(self):
+        token = A.create_token(self.SECRET, "  Ali@Example.COM ", 3600)
+        payload = A.verify_token(self.SECRET, token)
+        self.assertEqual(payload["e"], "ali@example.com")
+
+    def test_expired_token_is_rejected(self):
+        token = A.create_token(self.SECRET, "ali@example.com", 60, now=1_000_000)
+        self.assertIsNotNone(A.verify_token(self.SECRET, token, now=1_000_030))
+        self.assertIsNone(A.verify_token(self.SECRET, token, now=1_000_061))
+
+    def test_tampering_is_rejected(self):
+        token = A.create_token(self.SECRET, "ali@example.com", 3600)
+        body, signature = token.split(".")
+        forged = A.create_token(self.SECRET, "victim@example.com", 3600).split(".")[0]
+        self.assertIsNone(A.verify_token(self.SECRET, f"{forged}.{signature}"))
+        self.assertIsNone(A.verify_token(self.SECRET, f"{body}.{signature[:-2]}AA"))
+        self.assertIsNone(A.verify_token("another-secret", token))
+
+    def test_garbage_is_rejected_not_a_crash(self):
+        for garbage in ("", "abc", "a.b.c", "a.b", "é.é", None, 123, "." * 5, "e30.e30"):
+            with self.subTest(garbage=garbage):
+                self.assertIsNone(A.verify_token(self.SECRET, garbage))
+
+    def test_tokens_are_unique_and_do_not_contain_the_secret(self):
+        first = A.create_token(self.SECRET, "ali@example.com", 3600)
+        second = A.create_token(self.SECRET, "ali@example.com", 3600)
+        self.assertNotEqual(first, second)
+        self.assertNotIn(self.SECRET, first)
+
+
+class ExistsEmailLinkTests(WebhookTestCase):
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(A, "PUBLIC_BASE_URL", "https://fajr.test")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.moodle.users = [{"id": 5, "email": "ali@example.com"}]
+
+    def test_exists_email_carries_a_valid_reset_link(self):
+        self.assertEqual(self.send().get_json()["status"], "exists")
+        html_content = FakeMailAPI.sent[0]["html_content"]
+        match = re.search(r'href="https://fajr\.test/reset-password\?t=([^"]+)"', html_content)
+        self.assertIsNotNone(match)
+        self.assertEqual(A.verify_token("s3cret", match.group(1))["e"], "ali@example.com")
+        self.assertIn("valid for 60 minutes", html_content)
+        self.assertNotIn("forgot_password.php", html_content)
+
+    def test_without_a_public_address_the_moodle_link_is_used(self):
+        with mock.patch.object(A, "PUBLIC_BASE_URL", ""):
+            self.send()
+        html_content = FakeMailAPI.sent[0]["html_content"]
+        self.assertNotIn("reset-password", html_content)
+        self.assertIn("https://learn.fajr.com/login/forgot_password.php", html_content)
+
+    def test_no_link_can_be_made_without_the_secret(self):
+        with mock.patch.object(A, "WEBHOOK_SECRET", ""):
+            self.assertEqual(A._reset_link("ali@example.com"), "")
+
+    def test_new_students_do_not_get_a_reset_link(self):
+        self.moodle.users = []
+        self.send()
+        self.assertNotIn("reset-password", FakeMailAPI.sent[0]["html_content"])
+
+
+class ResetPasswordTests(WebhookTestCase):
+    USER = {
+        "id": 5, "username": "ali@example.com", "firstname": "Ali", "email": "ali@example.com",
+        "auth": "manual", "suspended": False,
+    }
+
+    def setUp(self):
+        super().setUp()
+        A._used_reset_nonces.clear()
+        A._last_reset.clear()
+        self.addCleanup(A._used_reset_nonces.clear)
+        self.addCleanup(A._last_reset.clear)
+        self.moodle.users = [dict(self.USER)]
+
+    def token(self, email="ali@example.com", ttl=3600, now=None):
+        return A.create_token("s3cret", email, ttl, now=now)
+
+    def confirm(self, token=None):
+        return self.client.post("/reset-password", data={"t": token or self.token()})
+
+    def updates(self):
+        return [call for call in self.moodle.calls if call["wsfunction"] == "core_user_update_users"]
+
+    # ---- الصفحة (GET)
+    def test_get_shows_a_confirmation_page_and_changes_nothing(self):
+        token = self.token()
+        response = self.client.get("/reset-password", query_string={"t": token})
+        self.assertEqual(response.status_code, 200)
+        text = response.get_data(as_text=True)
+        self.assertIn('method="post"', text)
+        self.assertIn(token, text)
+        self.assertEqual(self.moodle.calls, [])
+        self.assertEqual(FakeMailAPI.sent, [])
+
+    def test_page_has_hardening_headers(self):
+        response = self.client.get("/reset-password", query_string={"t": self.token()})
+        self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+        self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
+        self.assertNotIn("script", response.get_data(as_text=True).lower())
+
+    def test_invalid_expired_or_missing_tokens_are_refused_without_side_effects(self):
+        expired = self.token(ttl=60, now=1_000_000)
+        good_body = self.token().split(".")[0]
+        for label, token in (("none", None), ("junk", "junk"), ("expired", expired), ("unsigned", good_body + ".x")):
+            with self.subTest(token=label):
+                query = {} if token is None else {"t": token}
+                self.assertEqual(self.client.get("/reset-password", query_string=query).status_code, 400)
+                self.assertEqual(self.client.post("/reset-password", data=query).status_code, 400)
+        self.assertEqual(self.moodle.calls, [])
+        self.assertEqual(FakeMailAPI.sent, [])
+
+    def test_post_does_not_accept_the_token_from_the_query_string(self):
+        response = self.client.post("/reset-password", query_string={"t": self.token()})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.moodle.calls, [])
+
+    def test_other_methods_are_not_allowed(self):
+        self.assertEqual(self.client.put("/reset-password").status_code, 405)
+
+    def test_not_configured_secret_is_503(self):
+        with mock.patch.object(A, "WEBHOOK_SECRET", ""):
+            self.assertEqual(self.client.get("/reset-password", query_string={"t": "x"}).status_code, 503)
+
+    # ---- التنفيذ (POST)
+    def test_reset_changes_the_password_and_emails_it_to_the_student(self):
+        response = self.confirm()
+        self.assertEqual(response.status_code, 200)
+        update = self.updates()[0]
+        self.assertEqual(update["users[0][id]"], 5)
+        password = update["users[0][password]"]
+        self.assertGreaterEqual(len(password), 12)
+
+        self.assertEqual(self.moodle.call("core_user_get_users")["criteria[0][value]"], "ali@example.com")
+        sent = FakeMailAPI.sent[0]
+        self.assertEqual(sent["to"][0]["email"], "ali@example.com")
+        self.assertIn("reset", sent["subject"])
+        self.assertIn(password, sent["html_content"])
+        self.assertIn("ali@example.com", sent["html_content"])  # اسم المستخدم
+        self.assertIn("Hello Ali", sent["html_content"])
+
+    def test_password_is_never_shown_on_the_page(self):
+        response = self.confirm()
+        password = self.updates()[0]["users[0][password]"]
+        self.assertNotIn(password, response.get_data(as_text=True))
+        self.assertIn("Check your email", response.get_data(as_text=True))
+
+    def test_reset_email_is_not_copied_to_the_team(self):
+        with mock.patch.object(A, "TEAM_COPY_EMAIL", "team@example.com"):
+            self.confirm()
+        self.assertNotIn("bcc", FakeMailAPI.sent[0])
+
+    def test_username_that_differs_from_the_email_is_shown(self):
+        self.moodle.users = [dict(self.USER, username="student1634")]
+        self.confirm()
+        self.assertIn("student1634", FakeMailAPI.sent[0]["html_content"])
+
+    def test_password_change_is_forced_at_next_login(self):
+        self.confirm()
+        update = self.updates()[0]
+        self.assertEqual(update["users[0][preferences][0][type]"], "auth_forcepasswordchange")
+        self.assertEqual(update["users[0][preferences][0][value]"], "1")
+        self.assertIn("change your password", FakeMailAPI.sent[0]["html_content"])
+
+    def test_force_change_can_be_disabled(self):
+        with mock.patch.object(A, "FORCE_PASSWORD_CHANGE", False):
+            self.confirm()
+        self.assertNotIn("users[0][preferences][0][type]", self.updates()[0])
+        self.assertNotIn("change your password", FakeMailAPI.sent[0]["html_content"])
+
+    def test_link_works_only_once(self):
+        token = self.token()
+        self.assertEqual(self.confirm(token).status_code, 200)
+        self.assertEqual(self.confirm(token).status_code, 400)
+        self.assertEqual(self.client.get("/reset-password", query_string={"t": token}).status_code, 400)
+        self.assertEqual(len(self.updates()), 1)
+        self.assertEqual(len(FakeMailAPI.sent), 1)
+
+    def test_a_second_request_for_the_same_email_waits_for_the_cooldown(self):
+        self.assertEqual(self.confirm().status_code, 200)
+        response = self.confirm()  # رابط جديد لنفس الإيميل
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(len(self.updates()), 1)
+        with mock.patch.object(A, "RESET_COOLDOWN_MINUTES", 0):
+            self.assertEqual(self.confirm().status_code, 200)
+        self.assertEqual(len(self.updates()), 2)
+
+    def test_cooldown_is_per_email(self):
+        self.confirm()
+        other = dict(self.USER, id=6, email="sara@example.com", username="sara@example.com")
+        self.moodle.users = [other]
+        self.assertEqual(self.confirm(self.token("sara@example.com")).status_code, 200)
+
+    # ---- حالات الرفض
+    def test_accounts_that_cannot_be_reset_automatically_are_not_touched(self):
+        cases = {
+            "no account": [],
+            "two accounts": [dict(self.USER), dict(self.USER, id=6)],
+            "suspended": [dict(self.USER, suspended=True)],
+            "not manual auth": [dict(self.USER, auth="oauth2")],
+            "only a similar email": [dict(self.USER, email="ali_@example.com")],
+        }
+        for label, users in cases.items():
+            with self.subTest(case=label):
+                A._used_reset_nonces.clear()
+                A._last_reset.clear()
+                self.moodle.users = users
+                self.moodle.calls.clear()
+                FakeMailAPI.sent = []
+                response = self.confirm()
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("info@fajr.com", response.get_data(as_text=True))
+                self.assertEqual(self.updates(), [])
+                self.assertEqual(FakeMailAPI.sent, [])
+
+    def test_moodle_lookup_failure_can_be_retried_with_the_same_link(self):
+        token = self.token()
+        self.moodle.overrides["core_user_get_users"] = requests.ConnectionError("down")
+        self.assertEqual(self.confirm(token).status_code, 503)
+        self.assertEqual(self.updates(), [])
+        del self.moodle.overrides["core_user_get_users"]
+        self.assertEqual(self.confirm(token).status_code, 200)
+
+    def test_moodle_update_failure_sends_no_email_and_can_be_retried(self):
+        token = self.token()
+        self.moodle.overrides["core_user_update_users"] = MOODLE_EXCEPTION
+        self.assertEqual(self.confirm(token).status_code, 503)
+        self.assertEqual(FakeMailAPI.sent, [])
+        del self.moodle.overrides["core_user_update_users"]
+        self.assertEqual(self.confirm(token).status_code, 200)
+        self.assertEqual(len(FakeMailAPI.sent), 1)
+
+    def test_email_failure_is_tried_twice_logged_and_can_be_retried(self):
+        token = self.token()
+        FakeMailAPI.error = RuntimeError("brevo down")
+        with mock.patch.object(A, "send_email", wraps=A.send_email) as spy, \
+                self.assertLogs("fajr", level="ERROR") as logs:
+            response = self.confirm(token)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(spy.call_count, 2)
+        self.assertIn("WAS changed", "\n".join(logs.output))
+        self.assertNotIn(self.updates()[0]["users[0][password]"], response.get_data(as_text=True))
+        FakeMailAPI.error = None
+        self.assertEqual(self.confirm(token).status_code, 200)
+
+    def test_expired_state_is_purged(self):
+        A._used_reset_nonces["old"] = 1
+        A._last_reset["old@example.com"] = 1
+        self.confirm()
+        self.assertNotIn("old", A._used_reset_nonces)
+        self.assertNotIn("old@example.com", A._last_reset)
+
+    # ---- الخصوصية
+    def test_logs_never_contain_the_email_token_or_password(self):
+        token = self.token()
+        with self.assertLogs("fajr", level="INFO") as logs:
+            self.confirm(token)
+            self.confirm(token)  # رابط مستخدم
+            self.confirm(self.token())  # cooldown
+        text = "\n".join(logs.output)
+        password = self.updates()[0]["users[0][password]"]
+        self.assertNotIn("ali@example.com", text)
+        self.assertNotIn(token, text)
+        self.assertNotIn(token.split(".")[0], text)
+        self.assertNotIn(password, text)
+        self.assertIn("user id=5", text)
+
+    def test_moodle_failure_logs_do_not_leak_the_token_or_email(self):
+        self.moodle.overrides["core_user_update_users"] = requests.ConnectionError(
+            "https://moodle.test/?wstoken=TOK-123&email=ali@example.com"
+        )
+        with self.assertLogs("fajr", level="INFO") as logs:
+            self.confirm()
+        text = "\n".join(logs.output)
+        self.assertNotIn("TOK-123", text)
+        self.assertNotIn("ali@example.com", text)
 
 
 # ---------------------------------------------------------------- الأخطاء

@@ -13,7 +13,8 @@ Connects the WordPress admission form (Fluent Forms) → Flask webhook → Odoo 
 3. `study_mode = On-site` → ignored (`{"status": "skipped"}`). Missing/unknown `study_mode` → `400`.
 4. Flask creates (or finds) the student in Odoo.
 5. Flask looks the student up in Moodle:
-   - already registered → sends an "already registered" email;
+   - already registered → sends an "already registered" email with a one-click "forgot your password" link
+     (see [Password reset](#password-reset-for-returning-students));
    - new → creates the account (random password, forced change at first login),
      enrols in the placement course, adds to the Male/Female group, and sends the welcome email via Brevo.
 
@@ -58,6 +59,28 @@ Set `TEAM_COPY_EMAIL` (an environment variable, not code, because this repositor
 student (welcome and "already registered") is also delivered to that address as a BCC, so the team can follow up. Leave it
 empty for no copy. The copy shows the student's address in the *To* header. Note that the welcome email contains the
 student's temporary password. If a copy is rejected, the student's email is still sent without it.
+The password-reset email (below) is never copied to the team. The team copy of the "already registered" email does
+contain that student's working reset link.
+
+### Password reset for returning students
+
+Moodle's own "forgot password" page only shows a generic message, so the "already registered" email links to
+`/reset-password` on this service instead (the link falls back to Moodle's page if no public address is known).
+
+1. The link carries a signed token (HMAC, derived from `WEBHOOK_SECRET`) that holds only the student's email and an
+   expiry (`RESET_LINK_MINUTES`, default 60). Nothing is stored.
+2. Opening it shows a confirmation page and changes nothing, so email link scanners cannot trigger a reset.
+3. Pressing the button sets a new random temporary password in Moodle (change forced at next login unless
+   `FORCE_PASSWORD_CHANGE=false`) and **emails** it to the student. The password is never shown on the page or logged.
+4. A link works once, and the same email can be reset at most once per `RESET_COOLDOWN_MINUTES` (default 10).
+5. Accounts are not touched when the email matches no account or more than one, or the account is suspended or does
+   not use manual authentication: the student is told to contact `info@fajr.com`.
+
+Setup: `PUBLIC_BASE_URL` (the public address of this service, no trailing slash) is only needed if
+`RENDER_EXTERNAL_URL` is not set automatically (Render sets it). The Moodle web-service user behind `MOODLE_TOKEN`
+must be allowed to call **`core_user_update_users`**: add it to the external service's function list.
+Limits: the used-link list and the cooldown live in memory (per worker), so a restart forgets them; the link still
+expires on its own.
 
 ### If Odoo is down or slow
 
